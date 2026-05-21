@@ -16,6 +16,7 @@ use super::timesync::TimesyncThread;
 use super::tsi_dgram::TsiDgramProxy;
 use super::tsi_stream::TsiStreamProxy;
 use super::unix::UnixProxy;
+use super::HostPortMap;
 use super::TsiFlags;
 use super::VsockError;
 use crossbeam_channel::{unbounded, Sender};
@@ -98,7 +99,7 @@ pub fn push_packet(
 
 pub struct VsockMuxer {
     cid: u64,
-    host_port_map: Option<HashMap<u16, u16>>,
+    host_port_map: Option<HostPortMap>,
     queue: Option<Arc<Mutex<VirtQueue>>>,
     mem: Option<GuestMemoryMmap>,
     rxq: Arc<Mutex<MuxerRxQ>>,
@@ -113,7 +114,7 @@ pub struct VsockMuxer {
 impl VsockMuxer {
     pub(crate) fn new(
         cid: u64,
-        host_port_map: Option<HashMap<u16, u16>>,
+        host_port_map: Option<HostPortMap>,
         unix_ipc_port_map: Option<HashMap<u32, (PathBuf, bool)>>,
         tsi_flags: TsiFlags,
     ) -> Self {
