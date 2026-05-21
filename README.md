@@ -10,6 +10,47 @@
 
 It integrates a VMM (Virtual Machine Monitor, the userspace side of an Hypervisor) with the minimum amount of emulated devices required to its purpose, abstracting most of the complexity that comes from Virtual Machine management, offering users a simple C API.
 
+## Nimbus fork
+
+`nimbus/nimbus-libkrun` is a Nimbus-owned fork of upstream
+`containers/libkrun` for the private Linux service runtime stack used by
+`nimbus/nimbus-crun`. It preserves upstream history, keeps upstream as a
+separate remote, and adds the small TSI bind-address hook required for Nimbus
+localhost-only service exposure.
+
+Nimbus release archives install under `/usr/libexec/nimbus`:
+
+```text
+lib/libkrun.so.1.17.4
+lib/libkrun.so.1
+lib/libkrun.so
+lib/libkrunfw.so.5.3.0
+lib/libkrunfw.so.5
+lib/libkrunfw.so
+include/libkrun.h
+lib/pkgconfig/libkrun.pc
+```
+
+The package does not replace system `libkrun`, `libkrunfw`, or `crun`.
+Operators should consume it through Nimbus installers or packages rather than
+installing it into a global dynamic linker path.
+
+To build a release archive locally on Linux:
+
+```bash
+bash scripts/build-release-archive.sh \
+  --output-dir dist \
+  --arch amd64 \
+  --version v1.17.4-nimbus.1
+```
+
+To verify an archive:
+
+```bash
+bash scripts/verify-release-archive.sh \
+  --archive dist/nimbus-libkrun-linux-amd64.tar.gz
+```
+
 ## Use cases
 
 * [crun](https://github.com/containers/crun/blob/main/krun.1.md): Adding Virtualization-based isolation to container and confidential workloads.
