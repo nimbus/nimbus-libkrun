@@ -152,6 +152,19 @@ mkdir -p "${payload_dir}/lib" "${payload_dir}/include"
 cp -a "${dest_dir}/usr/libexec/nimbus/lib/." "${payload_dir}/lib/"
 cp -a "${dest_dir}/usr/libexec/nimbus/include/." "${payload_dir}/include/"
 
+cat > "${payload_dir}/lib/pkgconfig/libkrun.pc" <<'EOF'
+prefix=${pcfiledir}/../..
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libkrun
+Version: 1.17.4
+Description: Library providing Virtualization-based process isolation
+Requires:
+Cflags: -I${includedir}
+Libs: -L${libdir} -lkrun
+EOF
+
 if [[ -z "${libkrunfw_archive}" ]]; then
   libkrunfw_archive="${work_dir}/libkrunfw-${fw_arch}.tgz"
   curl -fsSL \
