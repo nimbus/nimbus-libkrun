@@ -9,7 +9,6 @@ use nix::sys::socket::{
     accept, bind, connect, listen, recv, send, shutdown, socket, AddressFamily, Backlog, MsgFlags,
     Shutdown, SockFlag, SockType, UnixAddr,
 };
-use std::collections::HashMap;
 use std::num::Wrapping;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -23,6 +22,7 @@ use super::muxer::{push_packet, MuxerRx};
 use super::muxer_rxq::MuxerRxQ;
 use super::packet::{TsiAcceptReq, TsiConnectReq, TsiListenReq, TsiSendtoAddr, VsockPacket};
 use super::proxy::{NewProxyType, Proxy, ProxyError, ProxyStatus, ProxyUpdate};
+use super::HostPortMap;
 use utils::epoll::EventSet;
 
 use vm_memory::GuestMemoryMmap;
@@ -448,7 +448,7 @@ impl Proxy for UnixProxy {
         &mut self,
         _pkt: &VsockPacket,
         _req: TsiListenReq,
-        _host_port_map: &Option<HashMap<u16, u16>>,
+        _host_port_map: &Option<HostPortMap>,
     ) -> ProxyUpdate {
         todo!();
     }
@@ -664,12 +664,7 @@ impl Proxy for UnixAcceptorProxy {
     fn sendto_addr(&mut self, _: TsiSendtoAddr) -> ProxyUpdate {
         unreachable!()
     }
-    fn listen(
-        &mut self,
-        _: &VsockPacket,
-        _: TsiListenReq,
-        _: &Option<HashMap<u16, u16>>,
-    ) -> ProxyUpdate {
+    fn listen(&mut self, _: &VsockPacket, _: TsiListenReq, _: &Option<HostPortMap>) -> ProxyUpdate {
         unreachable!()
     }
     fn accept(&mut self, _: TsiAcceptReq) -> ProxyUpdate {

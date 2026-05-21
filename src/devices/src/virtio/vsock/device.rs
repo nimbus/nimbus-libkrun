@@ -19,8 +19,8 @@ use super::super::{
 };
 use super::muxer::VsockMuxer;
 use super::packet::VsockPacket;
-use super::TsiFlags;
 use super::{defs, defs::uapi};
+use super::{HostPortMap, TsiFlags};
 use crate::virtio::InterruptTransport;
 
 pub(crate) const RXQ_INDEX: usize = 0;
@@ -52,7 +52,7 @@ impl Vsock {
     /// Create a new virtio-vsock device with the given VM CID.
     pub fn new(
         cid: u64,
-        host_port_map: Option<HashMap<u16, u16>>,
+        host_port_map: Option<HostPortMap>,
         unix_ipc_port_map: Option<HashMap<u32, (PathBuf, bool)>>,
         tsi_flags: TsiFlags,
     ) -> super::Result<Vsock> {

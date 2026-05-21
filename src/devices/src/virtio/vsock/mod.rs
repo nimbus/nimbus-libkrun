@@ -25,7 +25,33 @@ pub use self::defs::TsiFlags;
 pub use self::device::Vsock;
 
 use bitflags::bitflags;
+use std::collections::HashMap;
+use std::net::IpAddr;
 use vm_memory::GuestMemoryError;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostPortMapping {
+    pub port: u16,
+    pub address: Option<IpAddr>,
+}
+
+impl HostPortMapping {
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            address: None,
+        }
+    }
+
+    pub fn with_address(port: u16, address: IpAddr) -> Self {
+        Self {
+            port,
+            address: Some(address),
+        }
+    }
+}
+
+pub type HostPortMap = HashMap<u16, HostPortMapping>;
 
 mod defs {
     use super::bitflags;
