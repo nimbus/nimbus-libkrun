@@ -10,6 +10,7 @@ use devices::virtio::gpu::display::DisplayInfo;
 use devices::virtio::net::device::VirtioNetBackend;
 #[cfg(feature = "blk")]
 use devices::virtio::CacheType;
+use devices::virtio::{HostPortMap, HostPortMapping};
 use env_logger::{Env, Target};
 #[cfg(feature = "gpu")]
 use krun_display::DisplayBackend;
@@ -28,6 +29,7 @@ use std::ffi::CString;
 use std::ffi::{c_void, CStr};
 use std::fs::File;
 use std::io::IsTerminal;
+use std::net::IpAddr;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::fd::{BorrowedFd, FromRawFd, RawFd};
@@ -144,7 +146,7 @@ struct ContextConfig {
     #[cfg(feature = "net")]
     legacy_mac: Option<[u8; 6]>,
     net_index: u8,
-    tsi_port_map: Option<HashMap<u16, u16>>,
+    tsi_port_map: Option<HostPortMap>,
     vsock_config: VsockConfig,
     #[cfg(feature = "blk")]
     block_cfgs: Vec<BlockDeviceConfig>,
@@ -287,12 +289,12 @@ impl ContextConfig {
         self.legacy_mac = Some(mac);
     }
 
-    fn set_port_map(&mut self, new_port_map: HashMap<u16, u16>) -> Result<(), ()> {
+    fn set_port_map(&mut self, new_port_map: Option<HostPortMap>) -> Result<(), ()> {
         if self.net_index != 0 {
             return Err(());
         }
 
-        self.tsi_port_map.replace(new_port_map);
+        self.tsi_port_map = new_port_map;
         Ok(())
     }
 
@@ -1175,43 +1177,124 @@ pub unsafe extern "C" fn krun_set_net_mac(ctx_id: u32, c_mac: *const u8) -> i32 
     KRUN_SUCCESS
 }
 
-#[allow(clippy::missing_safety_doc)]
-#[no_mangle]
-pub unsafe extern "C" fn krun_set_port_map(ctx_id: u32, c_port_map: *const *const c_char) -> i32 {
-    let mut port_map = HashMap::new();
+#[derive(Clone, Copy)]
+enum PortMapSyntax {
+    Legacy,
+    BindAddress,
+}
+
+fn parse_port_value(value: &str) -> Result<u16, i32> {
+    let port = value.parse::<u16>().map_err(|_| -libc::EINVAL)?;
+    if port == 0 {
+        return Err(-libc::EINVAL);
+    }
+    Ok(port)
+}
+
+fn insert_port_mapping(
+    port_map: &mut HostPortMap,
+    guest_port: u16,
+    mapping: HostPortMapping,
+) -> Result<(), i32> {
+    if port_map.contains_key(&guest_port) {
+        return Err(-libc::EINVAL);
+    }
+    for existing in port_map.values() {
+        if existing.port == mapping.port {
+            return Err(-libc::EINVAL);
+        }
+    }
+    port_map.insert(guest_port, mapping);
+    Ok(())
+}
+
+fn parse_legacy_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), i32> {
+    let port_tuple: Vec<&str> = s.split(':').collect();
+    if port_tuple.len() != 2 {
+        return Err(-libc::EINVAL);
+    }
+    let host_port = parse_port_value(port_tuple[0])?;
+    let guest_port = parse_port_value(port_tuple[1])?;
+    Ok((guest_port, HostPortMapping::new(host_port)))
+}
+
+fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), i32> {
+    if let Some(rest) = s.strip_prefix('[') {
+        let Some(address_end) = rest.find(']') else {
+            return Err(-libc::EINVAL);
+        };
+        let address = rest[..address_end]
+            .parse::<IpAddr>()
+            .map_err(|_| -libc::EINVAL)?;
+        let port_part = rest[address_end + 1..]
+            .strip_prefix(':')
+            .ok_or(-libc::EINVAL)?;
+        let port_tuple: Vec<&str> = port_part.split(':').collect();
+        if port_tuple.len() != 2 {
+            return Err(-libc::EINVAL);
+        }
+        let host_port = parse_port_value(port_tuple[0])?;
+        let guest_port = parse_port_value(port_tuple[1])?;
+        return Ok((
+            guest_port,
+            HostPortMapping::with_address(host_port, address),
+        ));
+    }
+
+    let port_tuple: Vec<&str> = s.split(':').collect();
+    match port_tuple.len() {
+        2 => parse_legacy_port_map_entry(s),
+        3 => {
+            let address = port_tuple[0].parse::<IpAddr>().map_err(|_| -libc::EINVAL)?;
+            let host_port = parse_port_value(port_tuple[1])?;
+            let guest_port = parse_port_value(port_tuple[2])?;
+            Ok((
+                guest_port,
+                HostPortMapping::with_address(host_port, address),
+            ))
+        }
+        _ => Err(-libc::EINVAL),
+    }
+}
+
+fn parse_port_map_entry(s: &str, syntax: PortMapSyntax) -> Result<(u16, HostPortMapping), i32> {
+    match syntax {
+        PortMapSyntax::Legacy => parse_legacy_port_map_entry(s),
+        PortMapSyntax::BindAddress => parse_bind_address_port_map_entry(s),
+    }
+}
+
+unsafe fn parse_port_map(
+    c_port_map: *const *const c_char,
+    syntax: PortMapSyntax,
+) -> Result<Option<HostPortMap>, i32> {
+    if c_port_map.is_null() {
+        return Ok(None);
+    }
+
+    let mut port_map = HostPortMap::new();
     let port_map_array: &[*const c_char] = slice::from_raw_parts(c_port_map, MAX_ARGS);
     for item in port_map_array.iter().take(MAX_ARGS) {
         if item.is_null() {
             break;
-        } else {
-            let s = match CStr::from_ptr(*item).to_str() {
-                Ok(s) => s,
-                Err(_) => return -libc::EINVAL,
-            };
-            let port_tuple: Vec<&str> = s.split(':').collect();
-            if port_tuple.len() != 2 {
-                return -libc::EINVAL;
-            }
-            let host_port: u16 = match port_tuple[0].parse() {
-                Ok(p) => p,
-                Err(_) => return -libc::EINVAL,
-            };
-            let guest_port: u16 = match port_tuple[1].parse() {
-                Ok(p) => p,
-                Err(_) => return -libc::EINVAL,
-            };
-
-            if port_map.contains_key(&guest_port) {
-                return -libc::EINVAL;
-            }
-            for hp in port_map.values() {
-                if *hp == host_port {
-                    return -libc::EINVAL;
-                }
-            }
-            port_map.insert(guest_port, host_port);
         }
+
+        let s = CStr::from_ptr(*item).to_str().map_err(|_| -libc::EINVAL)?;
+        let (guest_port, mapping) = parse_port_map_entry(s, syntax)?;
+        insert_port_mapping(&mut port_map, guest_port, mapping)?;
     }
+    Ok(Some(port_map))
+}
+
+unsafe fn set_port_map_from_c(
+    ctx_id: u32,
+    c_port_map: *const *const c_char,
+    syntax: PortMapSyntax,
+) -> i32 {
+    let port_map = match parse_port_map(c_port_map, syntax) {
+        Ok(port_map) => port_map,
+        Err(error) => return error,
+    };
 
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
@@ -1227,6 +1310,64 @@ pub unsafe extern "C" fn krun_set_port_map(ctx_id: u32, c_port_map: *const *cons
     }
 
     KRUN_SUCCESS
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn krun_set_port_map(ctx_id: u32, c_port_map: *const *const c_char) -> i32 {
+    set_port_map_from_c(ctx_id, c_port_map, PortMapSyntax::Legacy)
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn krun_set_port_map_with_bind_address(
+    ctx_id: u32,
+    c_port_map: *const *const c_char,
+) -> i32 {
+    set_port_map_from_c(ctx_id, c_port_map, PortMapSyntax::BindAddress)
+}
+
+#[cfg(test)]
+mod port_map_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_port_map_entry_has_no_bind_address() {
+        let (guest_port, mapping) =
+            parse_port_map_entry("18080:8080", PortMapSyntax::Legacy).unwrap();
+
+        assert_eq!(guest_port, 8080);
+        assert_eq!(mapping, HostPortMapping::new(18080));
+    }
+
+    #[test]
+    fn bind_address_port_map_entry_accepts_ipv4() {
+        let (guest_port, mapping) =
+            parse_port_map_entry("127.0.0.1:18080:8080", PortMapSyntax::BindAddress).unwrap();
+
+        assert_eq!(guest_port, 8080);
+        assert_eq!(
+            mapping,
+            HostPortMapping::with_address(18080, "127.0.0.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn bind_address_port_map_entry_accepts_bracketed_ipv6() {
+        let (guest_port, mapping) =
+            parse_port_map_entry("[::1]:18080:8080", PortMapSyntax::BindAddress).unwrap();
+
+        assert_eq!(guest_port, 8080);
+        assert_eq!(
+            mapping,
+            HostPortMapping::with_address(18080, "::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn legacy_port_map_entry_rejects_bind_address_syntax() {
+        assert!(parse_port_map_entry("127.0.0.1:18080:8080", PortMapSyntax::Legacy).is_err());
+    }
 }
 
 #[allow(clippy::missing_safety_doc)]

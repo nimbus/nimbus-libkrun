@@ -540,6 +540,30 @@ int32_t krun_set_net_mac(uint32_t ctx_id, uint8_t *const c_mac);
  */
 int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
 
+/**
+ * Configures a map of host bind addresses and ports to guest TCP ports for the microVM.
+ *
+ * Arguments:
+ *  "ctx_id"   - the configuration context ID.
+ *  "port_map" - an array of string pointers with format
+ *               "host_address:host_port:guest_port" for IPv4 addresses,
+ *               "[host_address]:host_port:guest_port" for IPv6 addresses, or
+ *               "host_port:guest_port" for wildcard legacy mappings.
+ *
+ * Returns:
+ *  Zero on success or a negative error number on failure.
+ *  Documented errors:
+ *       -ENOTSUP when passt networking is used
+ *
+ * Notes:
+ *  This is the bind-address aware variant of krun_set_port_map. It keeps the
+ *  same guest-port uniqueness rules while allowing callers to restrict each
+ *  exposed host listener to a specific host IP address. When an explicit port
+ *  map is configured, guest TCP listen requests for unmapped ports are denied
+ *  instead of being exposed on the host.
+ */
+int32_t krun_set_port_map_with_bind_address(uint32_t ctx_id, const char *const port_map[]);
+
 /* Flags for virglrenderer.  Copied from virglrenderer bindings. */
 #define VIRGLRENDERER_USE_EGL 1 << 0
 #define VIRGLRENDERER_THREAD_SYNC 1 << 1

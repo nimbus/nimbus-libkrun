@@ -6,7 +6,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use devices::virtio::{TsiFlags, Vsock, VsockError};
+use devices::virtio::{HostPortMap, TsiFlags, Vsock, VsockError};
 
 type MutexVsock = Arc<Mutex<Vsock>>;
 
@@ -37,7 +37,7 @@ pub struct VsockDeviceConfig {
     /// A 32-bit Context Identifier (CID) used to identify the guest.
     pub guest_cid: u32,
     /// An optional map of host to guest port mappings.
-    pub host_port_map: Option<HashMap<u16, u16>>,
+    pub host_port_map: Option<HostPortMap>,
     /// An optional map of guest port to host UNIX domain sockets for IPC.
     pub unix_ipc_port_map: Option<HashMap<u32, (PathBuf, bool)>>,
     /// TSI feature flags

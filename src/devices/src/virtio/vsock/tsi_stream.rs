@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, SocketAddrV6};
 use std::num::Wrapping;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
@@ -33,6 +32,7 @@ use super::packet::{
 use super::proxy::{
     NewProxyType, Proxy, ProxyError, ProxyRemoval, ProxyStatus, ProxyUpdate, RecvPkt,
 };
+use super::HostPortMap;
 use utils::epoll::EventSet;
 
 use vm_memory::GuestMemoryMmap;
@@ -194,7 +194,7 @@ impl TsiStreamProxy {
             .set_fwd_cnt(self.tx_cnt.0);
     }
 
-    fn try_listen(&mut self, req: &TsiListenReq, host_port_map: &Option<HashMap<u16, u16>>) -> i32 {
+    fn try_listen(&mut self, req: &TsiListenReq, host_port_map: &Option<HostPortMap>) -> i32 {
         if self.status == ProxyStatus::Listening || self.status == ProxyStatus::WaitingOnAccept {
             return 0;
         }
@@ -202,17 +202,50 @@ impl TsiStreamProxy {
         let addr: SockaddrStorage = if let Some(port_map) = host_port_map {
             if let Some(sin) = req.addr.as_sockaddr_in() {
                 debug!("sockaddr is ipv4");
-                if let Some(port) = port_map.get(&sin.port()) {
-                    SocketAddrV4::new(sin.ip(), *port).into()
-                } else {
-                    req.addr
+                match port_map.get(&sin.port()) {
+                    Some(mapping) => match mapping.address {
+                        Some(IpAddr::V4(addr)) => SocketAddrV4::new(addr, mapping.port).into(),
+                        Some(IpAddr::V6(addr)) => {
+                            if let Some(addr) = addr.to_ipv4_mapped() {
+                                SocketAddrV4::new(addr, mapping.port).into()
+                            } else {
+                                return -libc::EINVAL;
+                            }
+                        }
+                        None => SocketAddrV4::new(sin.ip(), mapping.port).into(),
+                    },
+                    None => {
+                        debug!("guest ipv4 port {} is not mapped", sin.port());
+                        return -libc::EPERM;
+                    }
                 }
             } else if let Some(sin6) = req.addr.as_sockaddr_in6() {
                 debug!("sockaddr is ipv6");
-                if let Some(port) = port_map.get(&sin6.port()) {
-                    SocketAddrV6::new(sin6.ip(), *port, sin6.flowinfo(), sin6.flowinfo()).into()
-                } else {
-                    req.addr
+                match port_map.get(&sin6.port()) {
+                    Some(mapping) => match mapping.address {
+                        Some(IpAddr::V6(addr)) => {
+                            SocketAddrV6::new(addr, mapping.port, sin6.flowinfo(), sin6.flowinfo())
+                                .into()
+                        }
+                        Some(IpAddr::V4(addr)) => SocketAddrV6::new(
+                            addr.to_ipv6_mapped(),
+                            mapping.port,
+                            sin6.flowinfo(),
+                            sin6.flowinfo(),
+                        )
+                        .into(),
+                        None => SocketAddrV6::new(
+                            sin6.ip(),
+                            mapping.port,
+                            sin6.flowinfo(),
+                            sin6.flowinfo(),
+                        )
+                        .into(),
+                    },
+                    None => {
+                        debug!("guest ipv6 port {} is not mapped", sin6.port());
+                        return -libc::EPERM;
+                    }
                 }
             } else if req.addr.as_unix_addr().is_some() {
                 debug!("sockaddr is unix");
@@ -643,7 +676,7 @@ impl Proxy for TsiStreamProxy {
         &mut self,
         pkt: &VsockPacket,
         req: TsiListenReq,
-        host_port_map: &Option<HashMap<u16, u16>>,
+        host_port_map: &Option<HostPortMap>,
     ) -> ProxyUpdate {
         debug!(
             "listen: id={} addr={}, vm_port={} backlog={}",
