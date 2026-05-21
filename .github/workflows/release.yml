@@ -1,0 +1,184 @@
+name: Build nimbus-libkrun
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "nimbus-libkrun tag to build"
+        default: "v1.17.4-nimbus.1"
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.release_tag }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LIBKRUNFW_VERSION: "5.3.0"
+
+jobs:
+  build:
+    name: Build archive (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ -n "${INPUT_RELEASE_TAG}" ]]; then
+            release_tag="${INPUT_RELEASE_TAG}"
+          else
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_version=${release_tag#v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            patchelf \
+            pkg-config
+
+      - name: Prepare tagged source worktree
+        run: |
+          git fetch --tags --force
+          git worktree add "${RUNNER_TEMP}/source" "${{ steps.release.outputs.release_tag }}"
+
+      - name: Build release archive
+        run: |
+          bash scripts/build-release-archive.sh \
+            --source-dir "${RUNNER_TEMP}/source" \
+            --output-dir "${RUNNER_TEMP}/release" \
+            --arch "${{ matrix.arch }}" \
+            --version "${{ steps.release.outputs.release_tag }}" \
+            --libkrunfw-version "${LIBKRUNFW_VERSION}"
+
+      - name: Verify release archive
+        run: |
+          bash scripts/verify-release-archive.sh \
+            --archive "${RUNNER_TEMP}/release/nimbus-libkrun-linux-${{ matrix.arch }}.tar.gz" \
+            --expected-libkrunfw-version "${LIBKRUNFW_VERSION}"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: nimbus-libkrun-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release/nimbus-libkrun-linux-${{ matrix.arch }}.tar.gz
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Resolve release tag
+        id: release
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ -n "${INPUT_RELEASE_TAG}" ]]; then
+            release_tag="${INPUT_RELEASE_TAG}"
+          else
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download release archives
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Prepare release assets
+        id: assets
+        run: |
+          release_dir="${RUNNER_TEMP}/release"
+          mkdir -p "${release_dir}"
+          find "${RUNNER_TEMP}/artifacts" -type f -name 'nimbus-libkrun-linux-*.tar.gz' -exec cp {} "${release_dir}/" \;
+          cd "${release_dir}"
+          sha256sum nimbus-libkrun-linux-*.tar.gz > checksums.txt
+          cat checksums.txt
+          echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ steps.assets.outputs.release_dir }}/nimbus-libkrun-linux-amd64.tar.gz
+            ${{ steps.assets.outputs.release_dir }}/nimbus-libkrun-linux-arm64.tar.gz
+            ${{ steps.assets.outputs.release_dir }}/checksums.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_DIR: ${{ steps.assets.outputs.release_dir }}
+        run: |
+          notes="$(cat <<'NOTES'
+          Nimbus-private libkrun runtime stack.
+
+          **Build:** libkrun 1.17.4 with Nimbus TSI bind-address hook plus pinned libkrunfw 5.3.0.
+
+          The archive installs under `/usr/libexec/nimbus` and does not replace
+          system `libkrun`, `libkrunfw`, or `crun`.
+
+          **Verify:**
+          ```bash
+          sha256sum -c checksums.txt
+          tar -xzf nimbus-libkrun-linux-amd64.tar.gz -C /tmp/nimbus-libkrun
+          nm -D /tmp/nimbus-libkrun/lib/libkrun.so.1.17.4 | grep krun_set_port_map_with_bind_address
+          PKG_CONFIG_PATH=/tmp/nimbus-libkrun/lib/pkgconfig pkg-config --define-prefix --libs libkrun
+          ```
+          NOTES
+          )"
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "nimbus-libkrun ${RELEASE_TAG}" \
+              --notes "${notes}"
+          else
+            gh release create "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "nimbus-libkrun ${RELEASE_TAG}" \
+              --notes "${notes}"
+          fi
+
+          gh release upload "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${RELEASE_DIR}/nimbus-libkrun-linux-amd64.tar.gz" \
+            "${RELEASE_DIR}/nimbus-libkrun-linux-arm64.tar.gz" \
+            "${RELEASE_DIR}/checksums.txt"
