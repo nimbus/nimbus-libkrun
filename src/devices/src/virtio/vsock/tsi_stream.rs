@@ -935,6 +935,7 @@ impl Proxy for TsiStreamProxy {
 mod tests {
     use super::super::HostPortMapping;
     use super::*;
+    use std::net::Ipv6Addr;
 
     fn listen_req(addr: SockaddrStorage) -> TsiListenReq {
         TsiListenReq {
