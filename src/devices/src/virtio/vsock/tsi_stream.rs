@@ -32,7 +32,7 @@ use super::packet::{
 use super::proxy::{
     NewProxyType, Proxy, ProxyError, ProxyRemoval, ProxyStatus, ProxyUpdate, RecvPkt,
 };
-use super::HostPortMap;
+use super::{HostPortMap, HostPortMapping};
 use utils::epoll::EventSet;
 
 use vm_memory::GuestMemoryMmap;
@@ -58,6 +58,71 @@ pub struct TsiStreamProxy {
     push_cnt: Wrapping<u32>,
     pending_accepts: u64,
     unixsock_path: Option<PathBuf>,
+}
+
+fn listen_addr_for_port_map(
+    req: &TsiListenReq,
+    host_port_map: &Option<HostPortMap>,
+) -> Result<SockaddrStorage, i32> {
+    let Some(port_map) = host_port_map else {
+        return Ok(req.addr);
+    };
+
+    if let Some(sin) = req.addr.as_sockaddr_in() {
+        debug!("sockaddr is ipv4");
+        match port_map.get(&sin.port()) {
+            Some(mapping) => match mapping.address {
+                Some(IpAddr::V4(addr)) => Ok(SocketAddrV4::new(addr, mapping.port).into()),
+                Some(IpAddr::V6(addr)) => {
+                    if let Some(addr) = addr.to_ipv4_mapped() {
+                        Ok(SocketAddrV4::new(addr, mapping.port).into())
+                    } else {
+                        Err(-libc::EINVAL)
+                    }
+                }
+                None => Ok(SocketAddrV4::new(sin.ip(), mapping.port).into()),
+            },
+            None => {
+                debug!("guest ipv4 port {} is not mapped", sin.port());
+                Err(-libc::EPERM)
+            }
+        }
+    } else if let Some(sin6) = req.addr.as_sockaddr_in6() {
+        debug!("sockaddr is ipv6");
+        match port_map.get(&sin6.port()) {
+            Some(mapping) => match mapping.address {
+                Some(IpAddr::V6(addr)) => {
+                    Ok(
+                        SocketAddrV6::new(addr, mapping.port, sin6.flowinfo(), sin6.scope_id())
+                            .into(),
+                    )
+                }
+                Some(IpAddr::V4(addr)) => Ok(SocketAddrV6::new(
+                    addr.to_ipv6_mapped(),
+                    mapping.port,
+                    sin6.flowinfo(),
+                    sin6.scope_id(),
+                )
+                .into()),
+                None => Ok(SocketAddrV6::new(
+                    sin6.ip(),
+                    mapping.port,
+                    sin6.flowinfo(),
+                    sin6.scope_id(),
+                )
+                .into()),
+            },
+            None => {
+                debug!("guest ipv6 port {} is not mapped", sin6.port());
+                Err(-libc::EPERM)
+            }
+        }
+    } else if req.addr.as_unix_addr().is_some() {
+        debug!("sockaddr is unix");
+        Ok(req.addr)
+    } else {
+        Err(-libc::EINVAL)
+    }
 }
 
 impl TsiStreamProxy {
@@ -199,62 +264,9 @@ impl TsiStreamProxy {
             return 0;
         }
 
-        let addr: SockaddrStorage = if let Some(port_map) = host_port_map {
-            if let Some(sin) = req.addr.as_sockaddr_in() {
-                debug!("sockaddr is ipv4");
-                match port_map.get(&sin.port()) {
-                    Some(mapping) => match mapping.address {
-                        Some(IpAddr::V4(addr)) => SocketAddrV4::new(addr, mapping.port).into(),
-                        Some(IpAddr::V6(addr)) => {
-                            if let Some(addr) = addr.to_ipv4_mapped() {
-                                SocketAddrV4::new(addr, mapping.port).into()
-                            } else {
-                                return -libc::EINVAL;
-                            }
-                        }
-                        None => SocketAddrV4::new(sin.ip(), mapping.port).into(),
-                    },
-                    None => {
-                        debug!("guest ipv4 port {} is not mapped", sin.port());
-                        return -libc::EPERM;
-                    }
-                }
-            } else if let Some(sin6) = req.addr.as_sockaddr_in6() {
-                debug!("sockaddr is ipv6");
-                match port_map.get(&sin6.port()) {
-                    Some(mapping) => match mapping.address {
-                        Some(IpAddr::V6(addr)) => {
-                            SocketAddrV6::new(addr, mapping.port, sin6.flowinfo(), sin6.flowinfo())
-                                .into()
-                        }
-                        Some(IpAddr::V4(addr)) => SocketAddrV6::new(
-                            addr.to_ipv6_mapped(),
-                            mapping.port,
-                            sin6.flowinfo(),
-                            sin6.flowinfo(),
-                        )
-                        .into(),
-                        None => SocketAddrV6::new(
-                            sin6.ip(),
-                            mapping.port,
-                            sin6.flowinfo(),
-                            sin6.flowinfo(),
-                        )
-                        .into(),
-                    },
-                    None => {
-                        debug!("guest ipv6 port {} is not mapped", sin6.port());
-                        return -libc::EPERM;
-                    }
-                }
-            } else if req.addr.as_unix_addr().is_some() {
-                debug!("sockaddr is unix");
-                req.addr
-            } else {
-                return -libc::EINVAL;
-            }
-        } else {
-            req.addr
+        let addr = match listen_addr_for_port_map(req, host_port_map) {
+            Ok(addr) => addr,
+            Err(result) => return result,
         };
 
         let unixsock_path = self.get_unixsock_path(&addr);
@@ -916,6 +928,73 @@ impl Proxy for TsiStreamProxy {
         }
 
         update
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listen_req(addr: SockaddrStorage) -> TsiListenReq {
+        TsiListenReq {
+            peer_port: 0,
+            vm_port: 0,
+            backlog: 128,
+            addr,
+        }
+    }
+
+    #[test]
+    fn mapped_ipv4_listen_uses_explicit_bind_address() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(
+            8080,
+            HostPortMapping::with_address(18080, "127.0.0.1".parse().unwrap()),
+        );
+        let req = listen_req(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 8080).into());
+
+        let addr = listen_addr_for_port_map(&req, &Some(port_map)).unwrap();
+        let sin = addr.as_sockaddr_in().unwrap();
+
+        assert_eq!(sin.ip(), Ipv4Addr::new(127, 0, 0, 1));
+        assert_eq!(sin.port(), 18080);
+    }
+
+    #[test]
+    fn mapped_ipv6_listen_preserves_flowinfo_and_scope() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(8080, HostPortMapping::new(18080));
+        let req_addr: SockaddrStorage = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 8080, 7, 9).into();
+        let req = listen_req(req_addr);
+
+        let addr = listen_addr_for_port_map(&req, &Some(port_map)).unwrap();
+        let sin6 = addr.as_sockaddr_in6().unwrap();
+
+        assert_eq!(sin6.ip(), Ipv6Addr::LOCALHOST);
+        assert_eq!(sin6.port(), 18080);
+        assert_eq!(sin6.flowinfo(), 7);
+        assert_eq!(sin6.scope_id(), 9);
+    }
+
+    #[test]
+    fn unmapped_ipv4_listen_denied_when_explicit_map_exists() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(8080, HostPortMapping::new(18080));
+        let req = listen_req(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8081).into());
+
+        assert_eq!(
+            listen_addr_for_port_map(&req, &Some(port_map)),
+            Err(-libc::EPERM)
+        );
+    }
+
+    #[test]
+    fn listen_without_explicit_map_preserves_guest_address() {
+        let req_addr: SockaddrStorage = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8081).into();
+        let req = listen_req(req_addr);
+        let addr = listen_addr_for_port_map(&req, &None).unwrap();
+
+        assert_eq!(addr.as_sockaddr_in().unwrap().port(), 8081);
     }
 }
 
