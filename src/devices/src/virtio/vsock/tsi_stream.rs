@@ -32,7 +32,7 @@ use super::packet::{
 use super::proxy::{
     NewProxyType, Proxy, ProxyError, ProxyRemoval, ProxyStatus, ProxyUpdate, RecvPkt,
 };
-use super::{HostPortMap, HostPortMapping};
+use super::HostPortMap;
 use utils::epoll::EventSet;
 
 use vm_memory::GuestMemoryMmap;
@@ -933,6 +933,7 @@ impl Proxy for TsiStreamProxy {
 
 #[cfg(test)]
 mod tests {
+    use super::super::HostPortMapping;
     use super::*;
 
     fn listen_req(addr: SockaddrStorage) -> TsiListenReq {
