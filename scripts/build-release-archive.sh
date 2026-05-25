@@ -158,7 +158,7 @@ libdir=${prefix}/lib
 includedir=${prefix}/include
 
 Name: libkrun
-Version: 1.17.4
+Version: 1.18.1
 Description: Library providing Virtualization-based process isolation
 Requires:
 Cflags: -I${includedir}
@@ -184,7 +184,7 @@ fi
 
 cat > "${payload_dir}/NIMBUS_LIBKRUN_RELEASE.txt" <<EOF
 nimbus-libkrun=${release_version:-unknown}
-libkrun=1.17.4
+libkrun=1.18.1
 libkrunfw=${libkrunfw_version}
 arch=${archive_arch}
 prefix=/usr/libexec/nimbus
