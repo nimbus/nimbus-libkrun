@@ -142,7 +142,6 @@ echo "release.libkrunfw_version=${libkrunfw_version}"
 
 (
   cd "${source_dir}"
-  make PREFIX=/usr/libexec/nimbus LIBDIR_Linux=lib init/init
   cargo test -p libkrun port_map_tests -- --nocapture
   make PREFIX=/usr/libexec/nimbus LIBDIR_Linux=lib
   make PREFIX=/usr/libexec/nimbus LIBDIR_Linux=lib DESTDIR="${dest_dir}" install
