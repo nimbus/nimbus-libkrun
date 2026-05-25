@@ -88,7 +88,7 @@ if [[ ! -d "${root}" ]]; then
   exit 66
 fi
 
-libkrun="${root}/lib/libkrun.so.1.17.4"
+libkrun="${root}/lib/libkrun.so.1.18.1"
 libkrunfw="${root}/lib/libkrunfw.so.${expected_libkrunfw_version}"
 pc_file="${root}/lib/pkgconfig/libkrun.pc"
 
