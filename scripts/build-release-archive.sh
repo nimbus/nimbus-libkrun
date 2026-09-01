@@ -143,6 +143,7 @@ require_command cargo
 require_command curl
 require_command make
 require_command nm
+require_command patchelf
 require_command pkg-config
 require_command readelf
 require_command sha256sum
@@ -222,6 +223,9 @@ else
   echo "libkrunfw archive does not contain lib/ or lib64/" >&2
   exit 70
 fi
+
+origin_runpath="\$ORIGIN"
+patchelf --set-rpath "${origin_runpath}" "${payload_dir}/lib/libkrun.so.1.19.4"
 
 cat > "${payload_dir}/NIMBUS_LIBKRUN_RELEASE.txt" <<EOF
 nimbus-libkrun=${release_version:-unknown}
