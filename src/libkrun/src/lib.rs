@@ -1284,12 +1284,12 @@ fn parse_port_value(value: &str) -> Result<u16, i32> {
 }
 
 fn validate_bind_address(address: IpAddr) -> Result<IpAddr, i32> {
-    match address {
+    match canonical_host_address(address) {
         IpAddr::V4(address) if address.is_multicast() => Err(-libc::EINVAL),
         IpAddr::V6(address) if address.is_multicast() || address.is_unicast_link_local() => {
             Err(-libc::EINVAL)
         }
-        address => Ok(address),
+        _ => Ok(address),
     }
 }
 
@@ -1311,9 +1311,9 @@ fn host_endpoints_conflict(existing: HostPortMapping, candidate: HostPortMapping
     match (existing.address, candidate.address) {
         (None, _) | (_, None) => true,
         (Some(existing), Some(candidate)) => {
-            existing.is_unspecified()
-                || candidate.is_unspecified()
-                || canonical_host_address(existing) == canonical_host_address(candidate)
+            let existing = canonical_host_address(existing);
+            let candidate = canonical_host_address(candidate);
+            existing.is_unspecified() || candidate.is_unspecified() || existing == candidate
         }
     }
 }
@@ -1517,6 +1517,10 @@ mod port_map_tests {
     fn bind_address_port_map_entry_rejects_scope_dependent_ipv6() {
         assert!(parse_port_map_entry("[fe80::1]:18080:8080", PortMapSyntax::BindAddress).is_err());
         assert!(parse_port_map_entry("[ff02::1]:18080:8080", PortMapSyntax::BindAddress).is_err());
+        assert!(
+            parse_port_map_entry("[::ffff:224.0.0.1]:18080:8080", PortMapSyntax::BindAddress)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1604,8 +1608,19 @@ mod port_map_tests {
             c"[::ffff:127.0.0.1]:18080:8081".as_ptr(),
             std::ptr::null(),
         ];
+        let mapped_unspecified = [
+            c"[::ffff:0.0.0.0]:18080:8080".as_ptr(),
+            c"127.0.0.1:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
 
-        for entries in [same_address, wildcard, unspecified, mapped_ipv6] {
+        for entries in [
+            same_address,
+            wildcard,
+            unspecified,
+            mapped_ipv6,
+            mapped_unspecified,
+        ] {
             assert_eq!(
                 unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) },
                 Err(-libc::EINVAL)
