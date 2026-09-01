@@ -72,6 +72,7 @@ fi
 
 require_command nm
 require_command pkg-config
+require_command python3
 require_command readelf
 require_command tar
 
@@ -147,6 +148,42 @@ for elf_file in "${libkrun}" "${libkrunfw}"; do
     exit 70
   fi
 done
+
+runpath="$(readelf -d "${libkrun}" | sed -n 's/.*(RUNPATH).*Library runpath: \[\(.*\)\]/\1/p')"
+expected_runpath="\$ORIGIN"
+if [[ "${runpath}" != "${expected_runpath}" ]]; then
+  echo "libkrun RUNPATH does not resolve bundled dependencies" >&2
+  echo "expected: \$ORIGIN" >&2
+  echo "actual:   ${runpath:-<missing>}" >&2
+  exit 70
+fi
+
+env -u LD_LIBRARY_PATH python3 - "${libkrun}" "${libkrunfw}" <<'PY'
+import ctypes
+import os
+import sys
+
+libkrun_path = os.path.realpath(sys.argv[1])
+libkrunfw_path = os.path.realpath(sys.argv[2])
+libkrun = ctypes.CDLL(libkrun_path, mode=os.RTLD_LOCAL | os.RTLD_NOW)
+libkrun.krun_create_ctx.restype = ctypes.c_int32
+libkrun.krun_free_ctx.argtypes = [ctypes.c_uint32]
+libkrun.krun_free_ctx.restype = ctypes.c_int32
+
+ctx_id = libkrun.krun_create_ctx()
+if ctx_id < 0:
+    raise SystemExit(f"krun_create_ctx failed: {ctx_id}")
+
+try:
+    with open("/proc/self/maps", encoding="utf-8") as maps:
+        loaded_paths = {line.rstrip().split(maxsplit=5)[-1] for line in maps if "/" in line}
+    if libkrunfw_path not in {os.path.realpath(path) for path in loaded_paths}:
+        raise SystemExit(f"bundled libkrunfw was not loaded: {libkrunfw_path}")
+finally:
+    result = libkrun.krun_free_ctx(ctx_id)
+    if result != 0:
+        raise SystemExit(f"krun_free_ctx failed: {result}")
+PY
 
 grep -Fx "arch=${archive_arch}" "${release_manifest}" >/dev/null
 grep -Fx "libkrunfw_sha256=${expected_libkrunfw_sha256}" "${release_manifest}" >/dev/null

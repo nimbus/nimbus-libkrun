@@ -73,13 +73,7 @@ fn listen_addr_for_port_map(
         match port_map.get(&sin.port()) {
             Some(mapping) => match mapping.address {
                 Some(IpAddr::V4(addr)) => Ok(SocketAddrV4::new(addr, mapping.port).into()),
-                Some(IpAddr::V6(addr)) => {
-                    if let Some(addr) = addr.to_ipv4_mapped() {
-                        Ok(SocketAddrV4::new(addr, mapping.port).into())
-                    } else {
-                        Err(-libc::EINVAL)
-                    }
-                }
+                Some(IpAddr::V6(addr)) => Ok(SocketAddrV6::new(addr, mapping.port, 0, 0).into()),
                 None => Ok(SocketAddrV4::new(sin.ip(), mapping.port).into()),
             },
             None => {
@@ -92,9 +86,7 @@ fn listen_addr_for_port_map(
         match port_map.get(&sin6.port()) {
             Some(mapping) => match mapping.address {
                 Some(IpAddr::V6(addr)) => Ok(SocketAddrV6::new(addr, mapping.port, 0, 0).into()),
-                Some(IpAddr::V4(addr)) => {
-                    Ok(SocketAddrV6::new(addr.to_ipv6_mapped(), mapping.port, 0, 0).into())
-                }
+                Some(IpAddr::V4(addr)) => Ok(SocketAddrV4::new(addr, mapping.port).into()),
                 None => Ok(SocketAddrV6::new(
                     sin6.ip(),
                     mapping.port,
@@ -114,6 +106,61 @@ fn listen_addr_for_port_map(
     } else {
         Err(-libc::EINVAL)
     }
+}
+
+fn create_stream_socket(id: u64, family: AddressFamily) -> Result<OwnedFd, ProxyError> {
+    let fd = socket(family, SockType::Stream, SockFlag::empty(), None)
+        .map_err(ProxyError::CreatingSocket)?;
+
+    // macOS forces us to do this here instead of just using SockFlag::SOCK_NONBLOCK above.
+    match fcntl(&fd, FcntlArg::F_GETFL) {
+        Ok(flags) => match OFlag::from_bits(flags) {
+            Some(flags) => {
+                if let Err(e) = fcntl(&fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)) {
+                    warn!("error switching to non-blocking: id={id}, err={e}");
+                }
+            }
+            None => error!("invalid fd flags id={id}"),
+        },
+        Err(e) => error!("couldn't obtain fd flags id={id}, err={e}"),
+    };
+
+    if family == AddressFamily::Unix {
+        setsockopt(&fd, sockopt::ReuseAddr, &true).map_err(ProxyError::SettingReuseAddr)?;
+    } else {
+        setsockopt(&fd, sockopt::ReusePort, &true).map_err(ProxyError::SettingReusePort)?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // nix doesn't provide an abstraction for SO_NOSIGPIPE, fall back to libc.
+        let option_value: libc::c_int = 1;
+        unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_NOSIGPIPE,
+                &option_value as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&option_value) as libc::socklen_t,
+            )
+        };
+    }
+
+    Ok(fd)
+}
+
+fn proxy_error_result(error: ProxyError) -> i32 {
+    let error = match error {
+        ProxyError::CreatingSocket(error)
+        | ProxyError::SettingReuseAddr(error)
+        | ProxyError::SettingReusePort(error) => error,
+        ProxyError::InvalidFamily => return -EINVAL,
+    };
+
+    #[cfg(target_os = "macos")]
+    return -linux_errno_raw(error as i32);
+    #[cfg(target_os = "linux")]
+    return -(error as i32);
 }
 
 impl TsiStreamProxy {
@@ -136,42 +183,7 @@ impl TsiStreamProxy {
             defs::LINUX_AF_UNIX => AddressFamily::Unix,
             _ => return Err(ProxyError::InvalidFamily),
         };
-        let fd = socket(family, SockType::Stream, SockFlag::empty(), None)
-            .map_err(ProxyError::CreatingSocket)?;
-
-        // macOS forces us to do this here instead of just using SockFlag::SOCK_NONBLOCK above.
-        match fcntl(&fd, FcntlArg::F_GETFL) {
-            Ok(flags) => match OFlag::from_bits(flags) {
-                Some(flags) => {
-                    if let Err(e) = fcntl(&fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)) {
-                        warn!("error switching to non-blocking: id={id}, err={e}");
-                    }
-                }
-                None => error!("invalid fd flags id={id}"),
-            },
-            Err(e) => error!("couldn't obtain fd flags id={id}, err={e}"),
-        };
-
-        if family == AddressFamily::Unix {
-            setsockopt(&fd, sockopt::ReuseAddr, &true).map_err(ProxyError::SettingReuseAddr)?;
-        } else {
-            setsockopt(&fd, sockopt::ReusePort, &true).map_err(ProxyError::SettingReusePort)?;
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // nix doesn't provide an abstraction for SO_NOSIGPIPE, fall back to libc.
-            let option_value: libc::c_int = 1;
-            unsafe {
-                libc::setsockopt(
-                    fd.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_NOSIGPIPE,
-                    &option_value as *const _ as *const libc::c_void,
-                    std::mem::size_of_val(&option_value) as libc::socklen_t,
-                )
-            };
-        }
+        let fd = create_stream_socket(id, family)?;
 
         Ok(TsiStreamProxy {
             id,
@@ -259,6 +271,18 @@ impl TsiStreamProxy {
             Ok(addr) => addr,
             Err(result) => return result,
         };
+
+        let bind_family = match addr.family() {
+            Some(family) => family,
+            None => return -EINVAL,
+        };
+        if bind_family != self.family {
+            self.fd = match create_stream_socket(self.id, bind_family) {
+                Ok(fd) => fd,
+                Err(error) => return proxy_error_result(error),
+            };
+            self.family = bind_family;
+        }
 
         let unixsock_path = self.get_unixsock_path(&addr);
         // If the userspace process in the guest has already created the socket,
@@ -964,6 +988,38 @@ mod tests {
         let sin = addr.as_sockaddr_in().unwrap();
 
         assert_eq!(sin.ip(), Ipv4Addr::new(127, 0, 0, 1));
+        assert_eq!(sin.port(), 18080);
+    }
+
+    #[test]
+    fn mapped_ipv4_guest_can_use_ipv6_host_address() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(
+            8080,
+            HostPortMapping::with_address(18080, Ipv6Addr::LOCALHOST.into()),
+        );
+        let req = listen_req(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080).into());
+
+        let addr = listen_addr_for_port_map(&req, &Some(port_map)).unwrap();
+        let sin6 = addr.as_sockaddr_in6().unwrap();
+
+        assert_eq!(sin6.ip(), Ipv6Addr::LOCALHOST);
+        assert_eq!(sin6.port(), 18080);
+    }
+
+    #[test]
+    fn mapped_ipv6_guest_can_use_ipv4_host_address() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(
+            8080,
+            HostPortMapping::with_address(18080, Ipv4Addr::LOCALHOST.into()),
+        );
+        let req = listen_req(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 8080, 0, 0).into());
+
+        let addr = listen_addr_for_port_map(&req, &Some(port_map)).unwrap();
+        let sin = addr.as_sockaddr_in().unwrap();
+
+        assert_eq!(sin.ip(), Ipv4Addr::LOCALHOST);
         assert_eq!(sin.port(), 18080);
     }
 
