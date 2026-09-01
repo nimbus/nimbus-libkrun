@@ -32,7 +32,7 @@ use std::fs::File;
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 use std::io::Error;
 use std::io::IsTerminal;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(all(unix, target_arch = "x86_64", not(feature = "tee")))]
 use std::os::fd::AsRawFd;
 use std::os::fd::{BorrowedFd, FromRawFd, RawFd};
@@ -1312,7 +1312,7 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
             return Err(-libc::EINVAL);
         };
         let address = rest[..address_end]
-            .parse::<IpAddr>()
+            .parse::<Ipv6Addr>()
             .map_err(|_| -libc::EINVAL)?;
         let port_part = rest[address_end + 1..]
             .strip_prefix(':')
@@ -1325,7 +1325,7 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
         let guest_port = parse_port_value(port_tuple[1])?;
         return Ok((
             guest_port,
-            HostPortMapping::with_address(host_port, address),
+            HostPortMapping::with_address(host_port, IpAddr::V6(address)),
         ));
     }
 
@@ -1333,12 +1333,14 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
     match port_tuple.len() {
         2 => parse_legacy_port_map_entry(s),
         3 => {
-            let address = port_tuple[0].parse::<IpAddr>().map_err(|_| -libc::EINVAL)?;
+            let address = port_tuple[0]
+                .parse::<Ipv4Addr>()
+                .map_err(|_| -libc::EINVAL)?;
             let host_port = parse_port_value(port_tuple[1])?;
             let guest_port = parse_port_value(port_tuple[2])?;
             Ok((
                 guest_port,
-                HostPortMapping::with_address(host_port, address),
+                HostPortMapping::with_address(host_port, IpAddr::V4(address)),
             ))
         }
         _ => Err(-libc::EINVAL),
@@ -1361,17 +1363,17 @@ unsafe fn parse_port_map(
     }
 
     let mut port_map = HostPortMap::new();
-    let port_map_array: &[*const c_char] = slice::from_raw_parts(c_port_map, MAX_ARGS);
-    for item in port_map_array.iter().take(MAX_ARGS) {
+    for index in 0..MAX_ARGS {
+        let item = *c_port_map.add(index);
         if item.is_null() {
-            break;
+            return Ok(Some(port_map));
         }
 
-        let s = CStr::from_ptr(*item).to_str().map_err(|_| -libc::EINVAL)?;
+        let s = CStr::from_ptr(item).to_str().map_err(|_| -libc::EINVAL)?;
         let (guest_port, mapping) = parse_port_map_entry(s, syntax)?;
         insert_port_mapping(&mut port_map, guest_port, mapping)?;
     }
-    Ok(Some(port_map))
+    Err(-libc::E2BIG)
 }
 
 unsafe fn set_port_map_from_c(
@@ -1389,6 +1391,10 @@ unsafe fn set_port_map_from_c(
             let cfg = ctx_cfg.get_mut();
             if cfg.vsock_config == VsockConfig::Disabled {
                 return -libc::ENODEV;
+            }
+            #[cfg(feature = "net")]
+            if cfg.legacy_net_cfg.is_some() {
+                return -libc::ENOTSUP;
             }
             if cfg.set_port_map(port_map).is_err() {
                 return -libc::EINVAL;
@@ -1450,6 +1456,71 @@ mod port_map_tests {
             mapping,
             HostPortMapping::with_address(18080, "::1".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn bind_address_port_map_entry_rejects_bracketed_ipv4() {
+        assert!(
+            parse_port_map_entry("[127.0.0.1]:18080:8080", PortMapSyntax::BindAddress).is_err()
+        );
+    }
+
+    #[test]
+    fn bind_address_port_map_entry_rejects_unbracketed_ipv6() {
+        assert!(parse_port_map_entry("::1:18080:8080", PortMapSyntax::BindAddress).is_err());
+    }
+
+    #[test]
+    fn port_map_rejects_duplicate_guest_and_host_ports() {
+        let duplicate_guest = [
+            c"18080:8080".as_ptr(),
+            c"18081:8080".as_ptr(),
+            std::ptr::null(),
+        ];
+        let duplicate_host = [
+            c"18080:8080".as_ptr(),
+            c"18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+
+        assert_eq!(
+            unsafe { parse_port_map(duplicate_guest.as_ptr(), PortMapSyntax::Legacy) },
+            Err(-libc::EINVAL)
+        );
+        assert_eq!(
+            unsafe { parse_port_map(duplicate_host.as_ptr(), PortMapSyntax::Legacy) },
+            Err(-libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn null_and_empty_port_maps_keep_distinct_meanings() {
+        let empty = [std::ptr::null()];
+
+        assert_eq!(
+            unsafe { parse_port_map(std::ptr::null(), PortMapSyntax::Legacy) },
+            Ok(None)
+        );
+        assert!(
+            unsafe { parse_port_map(empty.as_ptr(), PortMapSyntax::Legacy) }
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn port_map_is_rejected_when_legacy_networking_disables_tsi() {
+        let ctx = krun_create_ctx() as u32;
+        let port_map = [c"18080:8080".as_ptr(), std::ptr::null()];
+
+        assert_eq!(unsafe { krun_set_passt_fd(ctx, 3) }, KRUN_SUCCESS);
+        assert_eq!(
+            unsafe { krun_set_port_map(ctx, port_map.as_ptr()) },
+            -libc::ENOTSUP
+        );
+        assert_eq!(krun_free_ctx(ctx), KRUN_SUCCESS);
     }
 
     #[test]
@@ -3251,7 +3322,7 @@ mod test_disable_implicit_init {
 
     #[test]
     fn test_disable_implicit_init() {
-        let ctx = unsafe { krun_create_ctx() } as u32;
+        let ctx = krun_create_ctx() as u32;
         unsafe {
             krun_disable_implicit_init(ctx);
             krun_set_root(ctx, c"/tmp".as_ptr());

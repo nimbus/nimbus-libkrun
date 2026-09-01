@@ -582,12 +582,17 @@ int32_t krun_set_net_mac(uint32_t ctx_id, uint8_t *const c_mac);
  *
  * Arguments:
  *  "ctx_id"   - the configuration context ID.
- *  "port_map" - an array of string pointers with format "host_port:guest_port"
+ *  "port_map" - a NULL-terminated array of string pointers with format
+ *               "host_port:guest_port"
  *
  * Returns:
  *  Zero on success or a negative error number on failure.
  *  Documented errors:
- *       -ENOTSUP when passt networking is used
+ *       -E2BIG when the array contains more than 4095 mappings
+ *       -EINVAL for malformed or duplicate mappings
+ *       -ENODEV when the vsock device is disabled
+ *       -ENOENT when "ctx_id" does not exist
+ *       -ENOTSUP when passt or gvproxy networking is used
  *
  * Notes:
  *  Passing NULL (or not calling this function) as "port_map" has a different meaning than
@@ -599,7 +604,7 @@ int32_t krun_set_net_mac(uint32_t ctx_id, uint8_t *const c_mac);
  *  means that for a map such as "8080:80", applications running inside the guest will also
  *  need to access the service through the "8080" port.
  *
- * If past networking mode is used (krun_set_passt_fd was called), port mapping is not supported
+ * If passt networking mode is used (krun_set_passt_fd was called), port mapping is not supported
  * as an API of libkrun (but you can still do port mapping using command line arguments of passt)
  */
 int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
@@ -609,7 +614,7 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  *
  * Arguments:
  *  "ctx_id"   - the configuration context ID.
- *  "port_map" - an array of string pointers with format
+ *  "port_map" - a NULL-terminated array of string pointers with format
  *               "host_address:host_port:guest_port" for IPv4 addresses,
  *               "[host_address]:host_port:guest_port" for IPv6 addresses, or
  *               "host_port:guest_port" for wildcard legacy mappings.
@@ -617,7 +622,11 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  * Returns:
  *  Zero on success or a negative error number on failure.
  *  Documented errors:
- *       -ENOTSUP when passt networking is used
+ *       -E2BIG when the array contains more than 4095 mappings
+ *       -EINVAL for malformed or duplicate mappings
+ *       -ENODEV when the vsock device is disabled
+ *       -ENOENT when "ctx_id" does not exist
+ *       -ENOTSUP when passt or gvproxy networking is used
  *
  * Notes:
  *  This is the bind-address aware variant of krun_set_port_map. It keeps the
@@ -625,6 +634,8 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  *  exposed host listener to a specific host IP address. When an explicit port
  *  map is configured, guest TCP listen requests for unmapped ports are denied
  *  instead of being exposed on the host.
+ *  NULL and an empty array have the same distinct meanings as they do for
+ *  krun_set_port_map.
  */
 int32_t krun_set_port_map_with_bind_address(uint32_t ctx_id, const char *const port_map[]);
 
