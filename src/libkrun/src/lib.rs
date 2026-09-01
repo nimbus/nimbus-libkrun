@@ -1303,6 +1303,13 @@ fn canonical_host_address(address: IpAddr) -> IpAddr {
     }
 }
 
+fn unspecified_host_address_conflicts(address: IpAddr, other: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => address.is_unspecified() && matches!(other, IpAddr::V4(_)),
+        IpAddr::V6(address) => address.is_unspecified(),
+    }
+}
+
 fn host_endpoints_conflict(existing: HostPortMapping, candidate: HostPortMapping) -> bool {
     if existing.port != candidate.port {
         return false;
@@ -1313,7 +1320,9 @@ fn host_endpoints_conflict(existing: HostPortMapping, candidate: HostPortMapping
         (Some(existing), Some(candidate)) => {
             let existing = canonical_host_address(existing);
             let candidate = canonical_host_address(candidate);
-            existing.is_unspecified() || candidate.is_unspecified() || existing == candidate
+            existing == candidate
+                || unspecified_host_address_conflicts(existing, candidate)
+                || unspecified_host_address_conflicts(candidate, existing)
         }
     }
 }
@@ -1568,6 +1577,28 @@ mod port_map_tests {
     }
 
     #[test]
+    fn bind_address_port_map_allows_ipv4_wildcard_with_ipv6_specific_endpoint() {
+        for entries in [
+            [
+                c"0.0.0.0:18080:8080".as_ptr(),
+                c"[::1]:18080:8081".as_ptr(),
+                std::ptr::null(),
+            ],
+            [
+                c"[::1]:18080:8080".as_ptr(),
+                c"0.0.0.0:18080:8081".as_ptr(),
+                std::ptr::null(),
+            ],
+        ] {
+            let mappings = unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) }
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(mappings.len(), 2);
+        }
+    }
+
+    #[test]
     fn bind_address_port_map_allows_mixed_address_modes() {
         let entries = [
             c"127.0.0.1:18080:8080".as_ptr(),
@@ -1613,6 +1644,11 @@ mod port_map_tests {
             c"127.0.0.1:18080:8081".as_ptr(),
             std::ptr::null(),
         ];
+        let dual_stack_unspecified = [
+            c"[::]:18080:8080".as_ptr(),
+            c"127.0.0.1:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
 
         for entries in [
             same_address,
@@ -1620,6 +1656,7 @@ mod port_map_tests {
             unspecified,
             mapped_ipv6,
             mapped_unspecified,
+            dual_stack_unspecified,
         ] {
             assert_eq!(
                 unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) },
