@@ -1371,6 +1371,8 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
 
     let port_tuple: Vec<&str> = s.split(':').collect();
     match port_tuple.len() {
+        // Mixed maps use this parser for both address-specific entries and
+        // entries that preserve the guest listen address.
         2 => parse_legacy_port_map_entry(s),
         3 => {
             let address = port_tuple[0]
@@ -1559,6 +1561,25 @@ mod port_map_tests {
             .unwrap();
 
         assert_eq!(mappings.len(), 3);
+    }
+
+    #[test]
+    fn bind_address_port_map_allows_mixed_address_modes() {
+        let entries = [
+            c"127.0.0.1:18080:8080".as_ptr(),
+            c"18081:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+
+        let mappings = unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) }
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            mappings.get(&8080).unwrap().address,
+            Some(Ipv4Addr::LOCALHOST.into())
+        );
+        assert_eq!(mappings.get(&8081).unwrap().address, None);
     }
 
     #[test]

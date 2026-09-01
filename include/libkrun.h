@@ -617,7 +617,7 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  *  "port_map" - a NULL-terminated array of string pointers with format
  *               "host_address:host_port:guest_port" for IPv4 addresses,
  *               "[host_address]:host_port:guest_port" for IPv6 addresses, or
- *               "host_port:guest_port" for wildcard legacy mappings.
+ *               "host_port:guest_port" to preserve the guest listen address.
  *
  * Returns:
  *  Zero on success or a negative error number on failure.
@@ -635,6 +635,7 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  *  addresses can reuse a host port. A wildcard mapping conflicts with every
  *  mapping on the same host port. IPv6 link-local and multicast addresses are
  *  rejected because this syntax cannot carry the required host scope ID.
+ *  One array can mix address-specific and guest-address-preserving entries.
  *  When an explicit port map is configured, guest TCP listen requests for
  *  unmapped ports are denied instead of being exposed on the host.
  *  NULL and an empty array have the same distinct meanings as they do for
