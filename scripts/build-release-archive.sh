@@ -12,7 +12,7 @@ options:
   --output-dir <path>          output directory for archive and checksums
   --arch <amd64|arm64>         archive architecture (default: detect host)
   --version <tag>              Nimbus release tag/version for metadata
-  --libkrunfw-version <ver>    pinned libkrunfw version (default: 5.3.0)
+  --libkrunfw-version <ver>    pinned libkrunfw version (default: 5.5.0)
   --libkrunfw-archive <path>   use a predownloaded libkrunfw archive
   -h, --help                   Show this help
 EOF
@@ -42,7 +42,7 @@ source_dir="${repo_root}"
 output_dir=""
 arch=""
 release_version=""
-libkrunfw_version="5.3.0"
+libkrunfw_version="5.5.0"
 libkrunfw_archive=""
 
 while [[ $# -gt 0 ]]; do
@@ -157,7 +157,7 @@ libdir=${prefix}/lib
 includedir=${prefix}/include
 
 Name: libkrun
-Version: 1.18.1
+Version: 1.19.4
 Description: Library providing Virtualization-based process isolation
 Requires:
 Cflags: -I${includedir}
@@ -183,7 +183,7 @@ fi
 
 cat > "${payload_dir}/NIMBUS_LIBKRUN_RELEASE.txt" <<EOF
 nimbus-libkrun=${release_version:-unknown}
-libkrun=1.18.1
+libkrun=1.19.4
 libkrunfw=${libkrunfw_version}
 arch=${archive_arch}
 prefix=/usr/libexec/nimbus

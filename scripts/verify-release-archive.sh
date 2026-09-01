@@ -10,7 +10,7 @@ Verify a Nimbus libkrun runtime archive or extracted archive root.
 options:
   --archive <path>                  archive to extract and verify
   --root <path>                     already-extracted archive root
-  --expected-libkrunfw-version <v>  expected libkrunfw version (default: 5.3.0)
+  --expected-libkrunfw-version <v>  expected libkrunfw version (default: 5.5.0)
   -h, --help                        Show this help
 EOF
 }
@@ -26,7 +26,7 @@ require_command() {
 
 archive=""
 root=""
-expected_libkrunfw_version="5.3.0"
+expected_libkrunfw_version="5.5.0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,7 +88,7 @@ if [[ ! -d "${root}" ]]; then
   exit 66
 fi
 
-libkrun="${root}/lib/libkrun.so.1.18.1"
+libkrun="${root}/lib/libkrun.so.1.19.4"
 libkrunfw="${root}/lib/libkrunfw.so.${expected_libkrunfw_version}"
 pc_file="${root}/lib/pkgconfig/libkrun.pc"
 
