@@ -931,6 +931,20 @@ impl Proxy for TsiStreamProxy {
     }
 }
 
+impl AsRawFd for TsiStreamProxy {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+}
+
+impl Drop for TsiStreamProxy {
+    fn drop(&mut self) {
+        if let Some(path) = &self.unixsock_path {
+            _ = fs::remove_file(path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::HostPortMapping;
@@ -997,19 +1011,5 @@ mod tests {
         let addr = listen_addr_for_port_map(&req, &None).unwrap();
 
         assert_eq!(addr.as_sockaddr_in().unwrap().port(), 8081);
-    }
-}
-
-impl AsRawFd for TsiStreamProxy {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
-    }
-}
-
-impl Drop for TsiStreamProxy {
-    fn drop(&mut self) {
-        if let Some(path) = &self.unixsock_path {
-            _ = fs::remove_file(path);
-        }
     }
 }
