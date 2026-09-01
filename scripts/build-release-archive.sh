@@ -193,6 +193,8 @@ echo "release.libkrunfw_sha256=${libkrunfw_sha256}"
 
 (
   cd "${source_dir}"
+  # libkrun resolves libkrunfw by soname at runtime. The trusted smoke test
+  # below proves that the packaged $ORIGIN path loads the pinned copy.
   cargo test -p libkrun port_map_tests -- --nocapture
   make PREFIX=/usr/libexec/nimbus LIBDIR_Linux=lib
   make PREFIX=/usr/libexec/nimbus LIBDIR_Linux=lib DESTDIR="${dest_dir}" install
