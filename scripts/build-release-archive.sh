@@ -240,6 +240,7 @@ EOF
   --root "${payload_dir}" \
   --expected-libkrunfw-version "${libkrunfw_version}" \
   --expected-arch "${archive_arch}"
+"${repo_root}/scripts/smoke-test-release-runtime.sh" --root "${payload_dir}"
 
 archive_name="nimbus-libkrun-linux-${archive_arch}.tar.gz"
 archive_path="${output_dir}/${archive_name}"
