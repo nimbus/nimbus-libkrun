@@ -108,11 +108,43 @@ case "${arch:-$(uname -m)}" in
     ;;
 esac
 
+case "$(uname -m)" in
+  x86_64)
+    host_arch="amd64"
+    ;;
+  aarch64|arm64)
+    host_arch="arm64"
+    ;;
+  *)
+    echo "unsupported host architecture: $(uname -m)" >&2
+    exit 64
+    ;;
+esac
+
+if [[ "${archive_arch}" != "${host_arch}" ]]; then
+  echo "native build host ${host_arch} cannot produce ${archive_arch} archive" >&2
+  exit 64
+fi
+
+case "${libkrunfw_version}:${fw_arch}" in
+  5.5.0:x86_64)
+    expected_libkrunfw_sha256="c169206b01c89fbe134f1728bf4f988702bc7f73b4cf73e6fdece447d6fceca1"
+    ;;
+  5.5.0:aarch64)
+    expected_libkrunfw_sha256="b04c9a5520a1ea52b5b35d87559566872246145961c4b6978034c9b9be54b89b"
+    ;;
+  *)
+    echo "no trusted libkrunfw digest for ${libkrunfw_version}:${fw_arch}" >&2
+    exit 64
+    ;;
+esac
+
 require_command cargo
 require_command curl
 require_command make
 require_command nm
 require_command pkg-config
+require_command readelf
 require_command sha256sum
 require_command tar
 
@@ -135,10 +167,28 @@ payload_dir="${work_dir}/payload"
 fw_dir="${work_dir}/libkrunfw"
 mkdir -p "${dest_dir}" "${payload_dir}" "${fw_dir}"
 
+if [[ -z "${libkrunfw_archive}" ]]; then
+  libkrunfw_archive="${work_dir}/libkrunfw-${fw_arch}.tgz"
+  curl -fsSL \
+    -o "${libkrunfw_archive}" \
+    "https://github.com/libkrun/libkrunfw/releases/download/v${libkrunfw_version}/libkrunfw-${fw_arch}.tgz"
+fi
+
+libkrunfw_sha256="$(sha256sum "${libkrunfw_archive}")"
+libkrunfw_sha256="${libkrunfw_sha256%% *}"
+if [[ "${libkrunfw_sha256}" != "${expected_libkrunfw_sha256}" ]]; then
+  echo "libkrunfw archive digest mismatch" >&2
+  echo "expected: ${expected_libkrunfw_sha256}" >&2
+  echo "actual:   ${libkrunfw_sha256}" >&2
+  exit 70
+fi
+tar -xzf "${libkrunfw_archive}" -C "${fw_dir}"
+
 echo "release.source_dir=${source_dir}"
 echo "release.output_dir=${output_dir}"
 echo "release.arch=${archive_arch}"
 echo "release.libkrunfw_version=${libkrunfw_version}"
+echo "release.libkrunfw_sha256=${libkrunfw_sha256}"
 
 (
   cd "${source_dir}"
@@ -164,14 +214,6 @@ Cflags: -I${includedir}
 Libs: -L${libdir} -lkrun
 EOF
 
-if [[ -z "${libkrunfw_archive}" ]]; then
-  libkrunfw_archive="${work_dir}/libkrunfw-${fw_arch}.tgz"
-  curl -fsSL \
-    -o "${libkrunfw_archive}" \
-    "https://github.com/containers/libkrunfw/releases/download/v${libkrunfw_version}/libkrunfw-${fw_arch}.tgz"
-fi
-
-tar -xzf "${libkrunfw_archive}" -C "${fw_dir}"
 if [[ -d "${fw_dir}/lib64" ]]; then
   cp -a "${fw_dir}/lib64"/libkrunfw.so* "${payload_dir}/lib/"
 elif [[ -d "${fw_dir}/lib" ]]; then
@@ -185,13 +227,15 @@ cat > "${payload_dir}/NIMBUS_LIBKRUN_RELEASE.txt" <<EOF
 nimbus-libkrun=${release_version:-unknown}
 libkrun=1.19.4
 libkrunfw=${libkrunfw_version}
+libkrunfw_sha256=${libkrunfw_sha256}
 arch=${archive_arch}
 prefix=/usr/libexec/nimbus
 EOF
 
 "${repo_root}/scripts/verify-release-archive.sh" \
   --root "${payload_dir}" \
-  --expected-libkrunfw-version "${libkrunfw_version}"
+  --expected-libkrunfw-version "${libkrunfw_version}" \
+  --expected-arch "${archive_arch}"
 
 archive_name="nimbus-libkrun-linux-${archive_arch}.tar.gz"
 archive_path="${output_dir}/${archive_name}"

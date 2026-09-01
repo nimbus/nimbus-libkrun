@@ -22,6 +22,28 @@ env:
   LIBKRUNFW_VERSION: "5.5.0"
 
 jobs:
+  source:
+    name: Prepare corresponding source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Prepare libkrunfw and Linux corresponding source
+        run: |
+          bash scripts/prepare-libkrunfw-source.sh \
+            --output-dir "${RUNNER_TEMP}/release" \
+            --libkrunfw-version "${LIBKRUNFW_VERSION}"
+
+      - name: Upload corresponding source
+        uses: actions/upload-artifact@v7
+        with:
+          name: nimbus-libkrun-corresponding-source
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release/nimbus-libkrunfw-*-corresponding-source.tar.gz
+
   build:
     name: Build archive (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -84,6 +106,7 @@ jobs:
         run: |
           bash scripts/verify-release-archive.sh \
             --archive "${RUNNER_TEMP}/release/nimbus-libkrun-linux-${{ matrix.arch }}.tar.gz" \
+            --expected-arch "${{ matrix.arch }}" \
             --expected-libkrunfw-version "${LIBKRUNFW_VERSION}"
 
       - name: Upload release archive
@@ -95,7 +118,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: build
+    needs: [build, source]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -130,8 +153,9 @@ jobs:
           release_dir="${RUNNER_TEMP}/release"
           mkdir -p "${release_dir}"
           find "${RUNNER_TEMP}/artifacts" -type f -name 'nimbus-libkrun-linux-*.tar.gz' -exec cp {} "${release_dir}/" \;
+          find "${RUNNER_TEMP}/artifacts" -type f -name 'nimbus-libkrunfw-*-corresponding-source.tar.gz' -exec cp {} "${release_dir}/" \;
           cd "${release_dir}"
-          sha256sum nimbus-libkrun-linux-*.tar.gz > checksums.txt
+          sha256sum nimbus-libkrun-*.tar.gz nimbus-libkrunfw-*-corresponding-source.tar.gz > checksums.txt
           cat checksums.txt
           echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
 
@@ -141,6 +165,7 @@ jobs:
           subject-path: |
             ${{ steps.assets.outputs.release_dir }}/nimbus-libkrun-linux-amd64.tar.gz
             ${{ steps.assets.outputs.release_dir }}/nimbus-libkrun-linux-arm64.tar.gz
+            ${{ steps.assets.outputs.release_dir }}/nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz
             ${{ steps.assets.outputs.release_dir }}/checksums.txt
 
       - name: Create or update GitHub Release
@@ -156,6 +181,10 @@ jobs:
 
           The archive installs under `/usr/libexec/nimbus` and does not replace
           system `libkrun`, `libkrunfw`, or `crun`.
+
+          `nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz` contains the exact
+          libkrunfw source, kernel source, patches, configuration, and licenses
+          that correspond to the bundled firmware binary.
 
           **Verify:**
           ```bash
@@ -184,4 +213,5 @@ jobs:
             --clobber \
             "${RELEASE_DIR}/nimbus-libkrun-linux-amd64.tar.gz" \
             "${RELEASE_DIR}/nimbus-libkrun-linux-arm64.tar.gz" \
+            "${RELEASE_DIR}/nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz" \
             "${RELEASE_DIR}/checksums.txt"

@@ -35,6 +35,11 @@ The package does not replace system `libkrun`, `libkrunfw`, or `crun`.
 Operators should consume it through Nimbus installers or packages rather than
 installing it into a global dynamic linker path.
 
+Each release also includes
+`nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz`. It contains the exact
+libkrunfw source, Linux kernel source, patches, configuration, and licenses for
+the bundled firmware binary.
+
 To build a release archive locally on Linux:
 
 ```bash
@@ -48,8 +53,12 @@ To verify an archive:
 
 ```bash
 bash scripts/verify-release-archive.sh \
-  --archive dist/nimbus-libkrun-linux-amd64.tar.gz
+  --archive dist/nimbus-libkrun-linux-amd64.tar.gz \
+  --expected-arch amd64
 ```
+
+The build rejects a target architecture that differs from the native host. It
+also verifies the pinned upstream SHA-256 digest before it extracts libkrunfw.
 
 ## Use cases
 
