@@ -91,19 +91,10 @@ fn listen_addr_for_port_map(
         debug!("sockaddr is ipv6");
         match port_map.get(&sin6.port()) {
             Some(mapping) => match mapping.address {
-                Some(IpAddr::V6(addr)) => {
-                    Ok(
-                        SocketAddrV6::new(addr, mapping.port, sin6.flowinfo(), sin6.scope_id())
-                            .into(),
-                    )
+                Some(IpAddr::V6(addr)) => Ok(SocketAddrV6::new(addr, mapping.port, 0, 0).into()),
+                Some(IpAddr::V4(addr)) => {
+                    Ok(SocketAddrV6::new(addr.to_ipv6_mapped(), mapping.port, 0, 0).into())
                 }
-                Some(IpAddr::V4(addr)) => Ok(SocketAddrV6::new(
-                    addr.to_ipv6_mapped(),
-                    mapping.port,
-                    sin6.flowinfo(),
-                    sin6.scope_id(),
-                )
-                .into()),
                 None => Ok(SocketAddrV6::new(
                     sin6.ip(),
                     mapping.port,
@@ -977,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn mapped_ipv6_listen_preserves_flowinfo_and_scope() {
+    fn mapped_ipv6_listen_without_bind_address_preserves_flowinfo_and_scope() {
         let mut port_map = HostPortMap::new();
         port_map.insert(8080, HostPortMapping::new(18080));
         let req_addr: SockaddrStorage = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 8080, 7, 9).into();
@@ -990,6 +981,26 @@ mod tests {
         assert_eq!(sin6.port(), 18080);
         assert_eq!(sin6.flowinfo(), 7);
         assert_eq!(sin6.scope_id(), 9);
+    }
+
+    #[test]
+    fn mapped_ipv6_listen_with_bind_address_clears_guest_scope() {
+        let mut port_map = HostPortMap::new();
+        port_map.insert(
+            8080,
+            HostPortMapping::with_address(18080, "2001:db8::1".parse().unwrap()),
+        );
+        let req_addr: SockaddrStorage =
+            SocketAddrV6::new("fe80::2".parse().unwrap(), 8080, 7, 9).into();
+        let req = listen_req(req_addr);
+
+        let addr = listen_addr_for_port_map(&req, &Some(port_map)).unwrap();
+        let sin6 = addr.as_sockaddr_in6().unwrap();
+
+        assert_eq!(sin6.ip(), "2001:db8::1".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(sin6.port(), 18080);
+        assert_eq!(sin6.flowinfo(), 0);
+        assert_eq!(sin6.scope_id(), 0);
     }
 
     #[test]

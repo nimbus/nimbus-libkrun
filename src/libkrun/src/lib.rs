@@ -1283,6 +1283,41 @@ fn parse_port_value(value: &str) -> Result<u16, i32> {
     Ok(port)
 }
 
+fn validate_bind_address(address: IpAddr) -> Result<IpAddr, i32> {
+    match address {
+        IpAddr::V4(address) if address.is_multicast() => Err(-libc::EINVAL),
+        IpAddr::V6(address) if address.is_multicast() || address.is_unicast_link_local() => {
+            Err(-libc::EINVAL)
+        }
+        address => Ok(address),
+    }
+}
+
+fn canonical_host_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(address)),
+        address => address,
+    }
+}
+
+fn host_endpoints_conflict(existing: HostPortMapping, candidate: HostPortMapping) -> bool {
+    if existing.port != candidate.port {
+        return false;
+    }
+
+    match (existing.address, candidate.address) {
+        (None, _) | (_, None) => true,
+        (Some(existing), Some(candidate)) => {
+            existing.is_unspecified()
+                || candidate.is_unspecified()
+                || canonical_host_address(existing) == canonical_host_address(candidate)
+        }
+    }
+}
+
 fn insert_port_mapping(
     port_map: &mut HostPortMap,
     guest_port: u16,
@@ -1292,7 +1327,7 @@ fn insert_port_mapping(
         return Err(-libc::EINVAL);
     }
     for existing in port_map.values() {
-        if existing.port == mapping.port {
+        if host_endpoints_conflict(*existing, mapping) {
             return Err(-libc::EINVAL);
         }
     }
@@ -1318,6 +1353,7 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
         let address = rest[..address_end]
             .parse::<Ipv6Addr>()
             .map_err(|_| -libc::EINVAL)?;
+        let address = validate_bind_address(IpAddr::V6(address))?;
         let port_part = rest[address_end + 1..]
             .strip_prefix(':')
             .ok_or(-libc::EINVAL)?;
@@ -1329,7 +1365,7 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
         let guest_port = parse_port_value(port_tuple[1])?;
         return Ok((
             guest_port,
-            HostPortMapping::with_address(host_port, IpAddr::V6(address)),
+            HostPortMapping::with_address(host_port, address),
         ));
     }
 
@@ -1340,11 +1376,12 @@ fn parse_bind_address_port_map_entry(s: &str) -> Result<(u16, HostPortMapping), 
             let address = port_tuple[0]
                 .parse::<Ipv4Addr>()
                 .map_err(|_| -libc::EINVAL)?;
+            let address = validate_bind_address(IpAddr::V4(address))?;
             let host_port = parse_port_value(port_tuple[1])?;
             let guest_port = parse_port_value(port_tuple[2])?;
             Ok((
                 guest_port,
-                HostPortMapping::with_address(host_port, IpAddr::V4(address)),
+                HostPortMapping::with_address(host_port, address),
             ))
         }
         _ => Err(-libc::EINVAL),
@@ -1475,6 +1512,17 @@ mod port_map_tests {
     }
 
     #[test]
+    fn bind_address_port_map_entry_rejects_scope_dependent_ipv6() {
+        assert!(parse_port_map_entry("[fe80::1]:18080:8080", PortMapSyntax::BindAddress).is_err());
+        assert!(parse_port_map_entry("[ff02::1]:18080:8080", PortMapSyntax::BindAddress).is_err());
+    }
+
+    #[test]
+    fn bind_address_port_map_entry_rejects_multicast_ipv4() {
+        assert!(parse_port_map_entry("224.0.0.1:18080:8080", PortMapSyntax::BindAddress).is_err());
+    }
+
+    #[test]
     fn port_map_rejects_duplicate_guest_and_host_ports() {
         let duplicate_guest = [
             c"18080:8080".as_ptr(),
@@ -1495,6 +1543,53 @@ mod port_map_tests {
             unsafe { parse_port_map(duplicate_host.as_ptr(), PortMapSyntax::Legacy) },
             Err(-libc::EINVAL)
         );
+    }
+
+    #[test]
+    fn bind_address_port_map_allows_distinct_explicit_host_endpoints() {
+        let entries = [
+            c"127.0.0.1:18080:8080".as_ptr(),
+            c"127.0.0.2:18080:8081".as_ptr(),
+            c"[::1]:18080:8082".as_ptr(),
+            std::ptr::null(),
+        ];
+
+        let mappings = unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) }
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(mappings.len(), 3);
+    }
+
+    #[test]
+    fn bind_address_port_map_rejects_conflicting_host_endpoints() {
+        let same_address = [
+            c"127.0.0.1:18080:8080".as_ptr(),
+            c"127.0.0.1:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+        let wildcard = [
+            c"18080:8080".as_ptr(),
+            c"127.0.0.1:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+        let unspecified = [
+            c"0.0.0.0:18080:8080".as_ptr(),
+            c"127.0.0.1:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+        let mapped_ipv6 = [
+            c"127.0.0.1:18080:8080".as_ptr(),
+            c"[::ffff:127.0.0.1]:18080:8081".as_ptr(),
+            std::ptr::null(),
+        ];
+
+        for entries in [same_address, wildcard, unspecified, mapped_ipv6] {
+            assert_eq!(
+                unsafe { parse_port_map(entries.as_ptr(), PortMapSyntax::BindAddress) },
+                Err(-libc::EINVAL)
+            );
+        }
     }
 
     #[test]

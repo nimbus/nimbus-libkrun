@@ -631,9 +631,12 @@ int32_t krun_set_port_map(uint32_t ctx_id, const char *const port_map[]);
  * Notes:
  *  This is the bind-address aware variant of krun_set_port_map. It keeps the
  *  same guest-port uniqueness rules while allowing callers to restrict each
- *  exposed host listener to a specific host IP address. When an explicit port
- *  map is configured, guest TCP listen requests for unmapped ports are denied
- *  instead of being exposed on the host.
+ *  exposed host listener to a specific host IP address. Distinct explicit
+ *  addresses can reuse a host port. A wildcard mapping conflicts with every
+ *  mapping on the same host port. IPv6 link-local and multicast addresses are
+ *  rejected because this syntax cannot carry the required host scope ID.
+ *  When an explicit port map is configured, guest TCP listen requests for
+ *  unmapped ports are denied instead of being exposed on the host.
  *  NULL and an empty array have the same distinct meanings as they do for
  *  krun_set_port_map.
  */
