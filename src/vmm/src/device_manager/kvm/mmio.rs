@@ -384,7 +384,7 @@ mod tests {
         }
 
         fn queue_config(&self) -> &[QueueConfig] {
-            &QUEUE_CONFIG
+            QUEUE_CONFIG
         }
 
         fn read_config(&self, offset: u64, data: &mut [u8]) {
