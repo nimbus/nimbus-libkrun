@@ -109,6 +109,12 @@ if [[ -n "${archive}" ]]; then
     echo "archive not found: ${archive}" >&2
     exit 66
   fi
+  archive_listing="$(tar --numeric-owner -tvf "${archive}")"
+  if ownership_mismatch="$(printf '%s\n' "${archive_listing}" | awk '$2 != "0/0" { print; found = 1; exit } END { exit !found }')"; then
+    echo "archive contains an entry that is not owned by root" >&2
+    echo "${ownership_mismatch}" >&2
+    exit 70
+  fi
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/nimbus-libkrun-verify.XXXXXX")"
   cleanup() {
     rm -rf "${work_dir}"

@@ -3,7 +3,7 @@ name: Build nimbus-libkrun
 on:
   push:
     tags:
-      - "v*"
+      - "v1.19.4-nimbus.*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -46,6 +46,11 @@ jobs:
             release_tag="${INPUT_RELEASE_TAG}"
           else
             release_tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${release_tag}" =~ ^v1\.19\.4-nimbus\.[1-9][0-9]*$ ]]; then
+            echo "release tag must match v1.19.4-nimbus.N: ${release_tag}" >&2
+            exit 64
           fi
 
           if ! git show-ref --verify --quiet "refs/tags/${release_tag}"; then
@@ -192,7 +197,7 @@ jobs:
             ${{ steps.assets.outputs.release_dir }}/nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz
             ${{ steps.assets.outputs.release_dir }}/checksums.txt
 
-      - name: Create or update GitHub Release
+      - name: Prepare draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
@@ -221,18 +226,31 @@ jobs:
           )"
 
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            is_draft="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)"
+            if [[ "${is_draft}" != "true" ]]; then
+              echo "release is already published: ${RELEASE_TAG}" >&2
+              exit 70
+            fi
             gh release edit "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
+              --draft \
               --title "nimbus-libkrun ${RELEASE_TAG}" \
               --notes "${notes}"
           else
             gh release create "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
+              --draft \
               --verify-tag \
               --title "nimbus-libkrun ${RELEASE_TAG}" \
               --notes "${notes}"
           fi
 
+      - name: Upload and verify draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          RELEASE_DIR: ${{ steps.assets.outputs.release_dir }}
+        run: |
           gh release upload "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber \
@@ -240,3 +258,36 @@ jobs:
             "${RELEASE_DIR}/nimbus-libkrun-linux-arm64.tar.gz" \
             "${RELEASE_DIR}/nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz" \
             "${RELEASE_DIR}/checksums.txt"
+
+          expected_assets="$(printf '%s\n' \
+            checksums.txt \
+            nimbus-libkrun-linux-amd64.tar.gz \
+            nimbus-libkrun-linux-arm64.tar.gz \
+            nimbus-libkrunfw-5.5.0-corresponding-source.tar.gz | sort)"
+          actual_assets="$(gh release view "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '.assets[].name' | sort)"
+          if [[ "${actual_assets}" != "${expected_assets}" ]]; then
+            echo "draft release asset set does not match the expected set" >&2
+            diff -u <(printf '%s\n' "${expected_assets}") <(printf '%s\n' "${actual_assets}") || true
+            exit 70
+          fi
+
+          remote_dir="$(mktemp -d "${RUNNER_TEMP}/remote-release.XXXXXX")"
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${remote_dir}"
+          (
+            cd "${remote_dir}"
+            sha256sum -c checksums.txt
+          )
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          gh release edit "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false

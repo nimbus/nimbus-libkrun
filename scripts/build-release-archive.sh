@@ -244,7 +244,7 @@ EOF
 
 archive_name="nimbus-libkrun-linux-${archive_arch}.tar.gz"
 archive_path="${output_dir}/${archive_name}"
-tar -czf "${archive_path}" -C "${payload_dir}" .
+tar --owner=0 --group=0 --numeric-owner -czf "${archive_path}" -C "${payload_dir}" .
 
 (
   cd "${output_dir}"
