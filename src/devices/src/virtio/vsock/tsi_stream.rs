@@ -277,6 +277,9 @@ impl TsiStreamProxy {
             None => return -EINVAL,
         };
         if bind_family != self.family {
+            // The muxer does not register this proxy with epoll until
+            // listen() returns its polling update, so this replacement occurs
+            // before the first descriptor registration.
             self.fd = match create_stream_socket(self.id, bind_family) {
                 Ok(fd) => fd,
                 Err(error) => return proxy_error_result(error),
