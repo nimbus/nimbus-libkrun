@@ -3,12 +3,12 @@ name: Build nimbus-libkrun
 on:
   push:
     tags:
-      - "v1.19.4-nimbus.*"
+      - "v1.19.6-nimbus.*"
   workflow_dispatch:
     inputs:
       release_tag:
         description: "nimbus-libkrun tag to build"
-        default: "v1.19.4-nimbus.1"
+        default: "v1.19.6-nimbus.1"
         required: true
 
 concurrency:
@@ -48,8 +48,8 @@ jobs:
             release_tag="${GITHUB_REF_NAME}"
           fi
 
-          if [[ ! "${release_tag}" =~ ^v1\.19\.4-nimbus\.[1-9][0-9]*$ ]]; then
-            echo "release tag must match v1.19.4-nimbus.N: ${release_tag}" >&2
+          if [[ ! "${release_tag}" =~ ^v1\.19\.6-nimbus\.[1-9][0-9]*$ ]]; then
+            echo "release tag must match v1.19.6-nimbus.N: ${release_tag}" >&2
             exit 64
           fi
 
@@ -206,7 +206,7 @@ jobs:
           notes="$(cat <<'NOTES'
           Nimbus-private libkrun runtime stack.
 
-          **Build:** libkrun 1.19.4 with Nimbus TSI bind-address hook plus pinned libkrunfw 5.5.0.
+          **Build:** libkrun 1.19.6 with Nimbus TSI bind-address hook plus pinned libkrunfw 5.5.0.
 
           The archive installs under `/usr/libexec/nimbus` and does not replace
           system `libkrun`, `libkrunfw`, or `crun`.
@@ -219,7 +219,7 @@ jobs:
           ```bash
           sha256sum -c checksums.txt
           tar -xzf nimbus-libkrun-linux-amd64.tar.gz -C /tmp/nimbus-libkrun
-          nm -D /tmp/nimbus-libkrun/lib/libkrun.so.1.19.4 | grep krun_set_port_map_with_bind_address
+          nm -D /tmp/nimbus-libkrun/lib/libkrun.so.1.19.6 | grep krun_set_port_map_with_bind_address
           PKG_CONFIG_PATH=/tmp/nimbus-libkrun/lib/pkgconfig pkg-config --define-prefix --libs libkrun
           ```
           NOTES

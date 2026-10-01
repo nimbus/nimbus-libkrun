@@ -129,7 +129,7 @@ if [[ ! -d "${root}" ]]; then
   exit 66
 fi
 
-libkrun="${root}/lib/libkrun.so.1.19.4"
+libkrun="${root}/lib/libkrun.so.1.19.6"
 libkrunfw="${root}/lib/libkrunfw.so.${expected_libkrunfw_version}"
 pc_file="${root}/lib/pkgconfig/libkrun.pc"
 release_manifest="${root}/NIMBUS_LIBKRUN_RELEASE.txt"

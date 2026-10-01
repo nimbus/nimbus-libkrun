@@ -21,7 +21,7 @@ localhost-only service exposure.
 Nimbus release archives install under `/usr/libexec/nimbus`:
 
 ```text
-lib/libkrun.so.1.19.4
+lib/libkrun.so.1.19.6
 lib/libkrun.so.1
 lib/libkrun.so
 lib/libkrunfw.so.5.5.0
@@ -46,7 +46,7 @@ To build a release archive locally on Linux:
 bash scripts/build-release-archive.sh \
   --output-dir dist \
   --arch amd64 \
-  --version v1.19.4-nimbus.1
+  --version v1.19.6-nimbus.1
 ```
 
 To verify an archive:

@@ -210,7 +210,7 @@ libdir=${prefix}/lib
 includedir=${prefix}/include
 
 Name: libkrun
-Version: 1.19.4
+Version: 1.19.6
 Description: Library providing Virtualization-based process isolation
 Requires:
 Cflags: -I${includedir}
@@ -227,11 +227,11 @@ else
 fi
 
 origin_runpath="\$ORIGIN"
-patchelf --set-rpath "${origin_runpath}" "${payload_dir}/lib/libkrun.so.1.19.4"
+patchelf --set-rpath "${origin_runpath}" "${payload_dir}/lib/libkrun.so.1.19.6"
 
 cat > "${payload_dir}/NIMBUS_LIBKRUN_RELEASE.txt" <<EOF
 nimbus-libkrun=${release_version:-unknown}
-libkrun=1.19.4
+libkrun=1.19.6
 libkrunfw=${libkrunfw_version}
 libkrunfw_sha256=${libkrunfw_sha256}
 arch=${archive_arch}

@@ -43,7 +43,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 root="$(cd "${root}" && pwd -P)"
-libkrun="${root}/lib/libkrun.so.1.19.4"
+libkrun="${root}/lib/libkrun.so.1.19.6"
 libkrunfw="${root}/lib/libkrunfw.so.5.5.0"
 test -f "${libkrun}"
 test -f "${libkrunfw}"
